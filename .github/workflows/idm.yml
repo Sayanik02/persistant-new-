@@ -25,18 +25,6 @@ jobs:
           name: vps-backup-latest
           path: ./backup
 
-      - name: Fallback: restore most recent backup if latest missing
-        if: steps.restore-latest.outcome == 'success'
-        run: |
-          echo "⚠️ Latest backup not found, restoring most recent available..."
-          gh api repos/${{ github.repository }}/actions/artifacts \
-            --jq '.artifacts | sort_by(.created_at) | reverse | .[0].archive_download_url' \
-            | xargs -r curl -L -o backup.zip -H "Authorization: token $GITHUB_TOKEN"
-          mkdir -p ./backup
-          unzip -o backup.zip -d ./backup
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install prerequisites
         run: |
           sudo apt update
@@ -105,15 +93,6 @@ jobs:
         with:
           name: vps-backup-${{ github.run_id }}
           path: backup.zip
-
-      - name: Keep only last 2 backups
-        run: |
-          echo "🧹 Cleaning old artifacts..."
-          gh api repos/${{ github.repository }}/actions/artifacts \
-            --jq '.artifacts | sort_by(.created_at) | reverse | .[2:][] | .id' \
-            | xargs -I {} gh api --method DELETE repos/${{ github.repository }}/actions/artifacts/{}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Save latest backup as consistent name
         uses: actions/upload-artifact@v4
