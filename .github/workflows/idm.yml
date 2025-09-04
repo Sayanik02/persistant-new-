@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:
+    inputs:
+      debug:
+        description: "Enable tmate SSH session?"
+        required: false
+        default: "false"
 
 jobs:
   vps-session:
@@ -65,18 +70,24 @@ jobs:
             echo "girdpixel ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/girdpixel
           fi
 
+      # ✅ Optional tmate step
       - name: Start tmate session for SSH access
+        if: ${{ github.event.inputs.debug == 'true' }}
         uses: mxschmitt/action-tmate@v3
 
-      - name: Show Tailscale IP and tmate info
+      - name: Show Tailscale IP and (optional) tmate info
         run: |
           echo "🔗 Tailscale IP:"
           tailscale ip -4 || echo "Tailscale IP not found"
-          echo ""
-          echo "🔑 tmate SSH session:"
-          tmate display -p '#{tmate_ssh}'
-          echo "🌐 Web terminal:"
-          tmate display -p '#{tmate_web}'
+          if [ "${{ github.event.inputs.debug }}" == "true" ]; then
+            echo ""
+            echo "🔑 tmate SSH session:"
+            tmate display -p '#{tmate_ssh}'
+            echo "🌐 Web terminal:"
+            tmate display -p '#{tmate_web}'
+          else
+            echo "tmate skipped (debug=false)"
+          fi
 
       - name: Sleep to keep VPS alive
         run: sleep 21000  # ~5h50m (safe under 355 min timeout)
