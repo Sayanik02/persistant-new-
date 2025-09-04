@@ -26,7 +26,7 @@ jobs:
           path: ./backup
 
       - name: Fallback: restore most recent backup if latest missing
-        if: steps.restore-latest.outcome == 'failure'
+        if: steps.restore-latest.outcome == 'success'
         run: |
           echo "⚠️ Latest backup not found, restoring most recent available..."
           gh api repos/${{ github.repository }}/actions/artifacts \
