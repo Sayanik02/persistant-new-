@@ -1,0 +1,122 @@
+name: Continuous Persistent VPS
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+
+jobs:
+  vps-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355  # Just under 6 hours
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set hostname to girdpixel
+        run: sudo hostnamectl set-hostname girdpixel
+
+      - name: Try restore from latest backup
+        id: restore-latest
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: vps-backup-latest
+          path: ./backup
+
+      - name: Fallback: restore most recent backup if latest missing
+        if: steps.restore-latest.outcome == 'failure'
+        run: |
+          echo "⚠️ Latest backup not found, restoring most recent available..."
+          gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '.artifacts | sort_by(.created_at) | reverse | .[0].archive_download_url' \
+            | xargs -r curl -L -o backup.zip -H "Authorization: token $GITHUB_TOKEN"
+          mkdir -p ./backup
+          unzip -o backup.zip -d ./backup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install prerequisites
+        run: |
+          sudo apt update
+          sudo apt install -y tmate curl unzip sudo net-tools neofetch gh
+
+      - name: Install Tailscale official script
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Restore backup files into system
+        run: |
+          if [ -f ./backup/backup.zip ]; then
+            unzip -o ./backup/backup.zip -d /
+          else
+            echo "No backup found, starting fresh"
+          fi
+
+      - name: Restore Tailscale state
+        run: |
+          if [ -f /opt/vps-backup/data/tailscaled.state ]; then
+            sudo mkdir -p /var/lib/tailscale
+            sudo cp /opt/vps-backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
+            sudo chmod 600 /var/lib/tailscale/tailscaled.state
+          fi
+
+      - name: Start Tailscale
+        run: |
+          sudo tailscaled &
+          sleep 8
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=girdpixel || echo "Tailscale already up"
+
+      - name: Create user girdpixel with sudo
+        run: |
+          if ! id -u girdpixel >/dev/null 2>&1; then
+            sudo useradd -m -s /bin/bash girdpixel
+            echo "girdpixel:girdpixel" | sudo chpasswd
+            sudo usermod -aG sudo girdpixel
+            echo "girdpixel ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/girdpixel
+          fi
+
+      - name: Start tmate session for SSH access
+        uses: mxschmitt/action-tmate@v3
+
+      - name: Show Tailscale IP and tmate info
+        run: |
+          echo "🔗 Tailscale IP:"
+          tailscale ip -4 || echo "Tailscale IP not found"
+          echo ""
+          echo "🔑 tmate SSH session:"
+          tmate display -p '#{tmate_ssh}'
+          echo "🌐 Web terminal:"
+          tmate display -p '#{tmate_web}'
+
+      - name: Sleep to keep VPS alive
+        run: sleep 21000  # ~5h50m (safe under 355 min timeout)
+
+      - name: Backup VPS data and tailscale state
+        run: |
+          sudo mkdir -p /opt/vps-backup/data
+          sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ || true
+          sudo chown -R $USER:$USER /opt/vps-backup
+          zip -r backup.zip /opt/vps-backup /home/girdpixel
+
+      - name: Upload VPS backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-backup-${{ github.run_id }}
+          path: backup.zip
+
+      - name: Keep only last 2 backups
+        run: |
+          echo "🧹 Cleaning old artifacts..."
+          gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '.artifacts | sort_by(.created_at) | reverse | .[2:][] | .id' \
+            | xargs -I {} gh api --method DELETE repos/${{ github.repository }}/actions/artifacts/{}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save latest backup as consistent name
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-backup-latest
+          path: backup.zip
