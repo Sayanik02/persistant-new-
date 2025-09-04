@@ -8,12 +8,12 @@ jobs:
   vps-session:
     runs-on: ubuntu-latest
     timeout-minutes: 355  # Just under 6 hours
-    steps:
-      - name: Checkout repo
+      steps:
+      - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Set hostname to girdpixel
         run: sudo hostnamectl set-hostname girdpixel
-      - name: Try restore from latest backup
         id: restore-latest
         continue-on-error: true
         uses: actions/download-artifact@v4
