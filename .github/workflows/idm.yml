@@ -56,10 +56,6 @@ jobs:
             echo "girdpixel ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/girdpixel
           fi
 
-      - name: Start tmate session for SSH access (optional)
-              if: ${{ secrets.ENABLE_TMATE == 'true' }}
-              uses: mxschmitt/action-tmate@v3
-
       - name: Show Tailscale IP and tmate info
         run: |
           echo "🔗 Tailscale IP:"
