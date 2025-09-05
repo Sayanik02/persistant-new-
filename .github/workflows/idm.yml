@@ -4,16 +4,11 @@ on:
   schedule:
     - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:
-    inputs:
-      debug:
-        description: "Enable tmate SSH session?"
-        required: false
-        default: "false"
 
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # Just under 6 hours
+    timeout-minutes: 360 # Just under 6 hours
 
     steps:
       - name: Checkout repository
@@ -23,7 +18,6 @@ jobs:
         run: sudo hostnamectl set-hostname girdpixel
 
       - name: Try restore from latest backup
-        id: restore-latest
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -33,7 +27,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y tmate curl unzip sudo net-tools neofetch gh
+          sudo apt install -y tmate curl unzip sudo net-tools neofetch gh zstd
 
       - name: Install Tailscale official script
         run: |
@@ -41,18 +35,10 @@ jobs:
 
       - name: Restore backup files into system
         run: |
-          if [ -f ./backup/backup.zip ]; then
-            unzip -o ./backup/backup.zip -d /
+          if [ -f ./backup/backup.tar.zst ]; then
+            sudo tar --use-compress-program=unzstd -xvf ./backup/backup.tar.zst -C /
           else
             echo "No backup found, starting fresh"
-          fi
-
-      - name: Restore Tailscale state
-        run: |
-          if [ -f /opt/vps-backup/data/tailscaled.state ]; then
-            sudo mkdir -p /var/lib/tailscale
-            sudo cp /opt/vps-backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
-            sudo chmod 600 /var/lib/tailscale/tailscaled.state
           fi
 
       - name: Start Tailscale
@@ -70,43 +56,41 @@ jobs:
             echo "girdpixel ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/girdpixel
           fi
 
-      # ✅ Optional tmate step
-      - name: Start tmate session for SSH access
-        if: ${{ github.event.inputs.debug == 'true' }}
+      - name: Start tmate session for SSH access (optional)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: mxschmitt/action-tmate@v3
 
-      - name: Show Tailscale IP and (optional) tmate info
+      - name: Show Tailscale IP and tmate info
         run: |
           echo "🔗 Tailscale IP:"
           tailscale ip -4 || echo "Tailscale IP not found"
-          if [ "${{ github.event.inputs.debug }}" == "true" ]; then
-            echo ""
-            echo "🔑 tmate SSH session:"
-            tmate display -p '#{tmate_ssh}'
-            echo "🌐 Web terminal:"
-            tmate display -p '#{tmate_web}'
-          else
-            echo "tmate skipped (debug=false)"
-          fi
+          echo ""
+          echo "🔑 tmate SSH session (if running):"
+          command -v tmate >/dev/null && tmate display -p '#{tmate_ssh}' || echo "No tmate session"
+          echo "🌐 Web terminal:"
+          command -v tmate >/dev/null && tmate display -p '#{tmate_web}' || echo "No web terminal"
 
       - name: Sleep to keep VPS alive
         run: sleep 21000  # ~5h50m (safe under 355 min timeout)
 
-      - name: Backup VPS data and tailscale state
+      - name: Backup VPS data
         run: |
-          sudo mkdir -p /opt/vps-backup/data
-          sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ || true
+          sudo mkdir -p /opt/vps-backup
           sudo chown -R $USER:$USER /opt/vps-backup
-          zip -r backup.zip /opt/vps-backup /home/girdpixel
+          tar --use-compress-program=zstd -cvf backup.tar.zst \
+            --exclude='.cache' \
+            --exclude='*.log' \
+            --exclude='node_modules' \
+            /opt/vps-backup /home/girdpixel
 
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
         with:
           name: vps-backup-${{ github.run_id }}
-          path: backup.zip
+          path: backup.tar.zst
 
       - name: Save latest backup as consistent name
         uses: actions/upload-artifact@v4
         with:
           name: vps-backup-latest
-          path: backup.zip
+          path: backup.tar.zst
