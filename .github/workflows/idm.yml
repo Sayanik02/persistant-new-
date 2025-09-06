@@ -67,26 +67,38 @@ jobs:
           command -v tmate >/dev/null && tmate display -p '#{tmate_web}' || echo "No web terminal"
 
       - name: Sleep to keep VPS alive
-        run: sleep 21000  # ~5h50m (safe under 355 min timeout)
+        run: sleep 20400  # ~5h40m (safe under 360 min timeout)
 
       - name: Backup VPS data
         run: |
-          sudo mkdir -p /opt/vps-backup
-          sudo chown -R $USER:$USER /opt/vps-backup
-          tar --use-compress-program=zstd -cvf backup.tar.zst \
-            --exclude='.cache' \
-            --exclude='*.log' \
-            --exclude='node_modules' \
-            /opt/vps-backup /home/girdpixel
+          echo "✅ Backing up VPS data..."
+          BACKUP_DIR="/opt/vps-backup"
+          sudo mkdir -p "$BACKUP_DIR/data"
+
+          echo "📂 Copying Tailscale state..."
+          if [ -f /var/lib/tailscale/tailscaled.state ]; then
+            sudo cp /var/lib/tailscale/tailscaled.state "$BACKUP_DIR/data/"
+          fi
+
+          echo "📂 Preparing directories to backup: /etc /var /home/HTNodes /opt"
+          TOTAL_SIZE=$(du -sb /etc /var /home/HTNodes /opt \
+            --exclude=/var/log \
+            --exclude=/var/cache \
+            --exclude=/var/lib/apt/lists \
+            --exclude=/var/lib/docker 2>/dev/null | awk '{sum+=$1} END {print sum}')
+          echo "📦 Total size after exclusions: $TOTAL_SIZE bytes"
+
+          echo "🔄 Creating compressed backup with progress bar..."
+          sudo tar --exclude='/var/log' \
+                   --exclude='/var/cache' \
+                   --exclude='/var/lib/apt/lists' \
+                   --exclude='/var/lib/docker' \
+                   -cf - /etc /var /home/HTNodes /opt | pv -s $TOTAL_SIZE | pigz -9 > backup.tar.gz
+
+          echo "✅ Backup complete!"
 
       - name: Upload VPS backup artifact
-        uses: dawidd6/action-download-artifact@v3
-        with:
-          name: vps-backup-${{ github.run_id }}
-          path: backup.tar.zst
-
-      - name: Save latest backup as consistent name
         uses: actions/upload-artifact@v4
         with:
-          name: vps-backup-latest
-          path: backup.tar.zst
+          name: vps-backup
+          path: backup.tar.gz
