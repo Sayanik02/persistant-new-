@@ -80,7 +80,7 @@ jobs:
             /opt/vps-backup /home/girdpixel
 
       - name: Upload VPS backup artifact
-        uses: actions/upload-artifact@v4
+        uses: dawidd6/action-download-artifact@v3
         with:
           name: vps-backup-${{ github.run_id }}
           path: backup.tar.zst
