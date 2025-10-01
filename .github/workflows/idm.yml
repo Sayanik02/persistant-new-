@@ -27,7 +27,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y tmate curl unzip sudo net-tools neofetch gh zstd
+          sudo apt install -y tmate curl unzip sudo net-tools neofetch gh zstd pv pigz
 
       - name: Install Tailscale official script
         run: |
@@ -88,17 +88,24 @@ jobs:
             --exclude=/var/lib/docker 2>/dev/null | awk '{sum+=$1} END {print sum}')
           echo "📦 Total size after exclusions: $TOTAL_SIZE bytes"
 
-          echo "🔄 Creating compressed backup with progress bar..."
+          echo "🔄 Creating compressed backup (.tar.zst) with progress bar..."
           sudo tar --exclude='/var/log' \
                    --exclude='/var/cache' \
                    --exclude='/var/lib/apt/lists' \
                    --exclude='/var/lib/docker' \
-                   -cf - /etc /var /home/HTNodes /opt | pv -s $TOTAL_SIZE | pigz -9 > backup.tar.gz
+                   -cf - /etc /var /home/HTNodes /opt | pv -s $TOTAL_SIZE | zstd -19 -T0 -o backup.tar.zst
 
           echo "✅ Backup complete!"
 
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vps-backup
-          path: backup.tar.gz
+          name: vps-backup-latest
+          path: backup.tar.zst
+          overwrite: true   # ensures old backup is replaced
+
+      - name: Delete old backup artifacts (auto-clean)
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            vps-backup
