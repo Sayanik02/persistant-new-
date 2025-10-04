@@ -1,20 +1,18 @@
-name: Continuous Persistent VPS
+name: Continuous Persistent VPS (Test Mode)
 
 on:
-  schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:
 
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Just under 6 hours
+    timeout-minutes: 30  # Enough for test
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set hostname to girdpixel
+      - name: Set hostname
         run: sudo hostnamectl set-hostname girdpixel
 
       - name: Try restore from latest backup
@@ -29,16 +27,17 @@ jobs:
           sudo apt update
           sudo apt install -y tmate curl unzip sudo net-tools neofetch gh zstd pv pigz
 
-      - name: Install Tailscale official script
+      - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Restore backup files into system
         run: |
-          if [ -f ./backup/backup.tar.zst ]; then
-            sudo tar --use-compress-program=unzstd -xvf ./backup/backup.tar.zst -C /
+          if [ -f ./backup/backup.tar.gz ]; then
+            echo "🗂️ Restoring system files..."
+            sudo tar -xzf ./backup/backup.tar.gz -C /
           else
-            echo "No backup found, starting fresh"
+            echo "No previous backup found, starting fresh."
           fi
 
       - name: Start Tailscale
@@ -47,7 +46,7 @@ jobs:
           sleep 8
           sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=girdpixel || echo "Tailscale already up"
 
-      - name: Create user girdpixel with sudo
+      - name: Ensure girdpixel user exists
         run: |
           if ! id -u girdpixel >/dev/null 2>&1; then
             sudo useradd -m -s /bin/bash girdpixel
@@ -56,56 +55,46 @@ jobs:
             echo "girdpixel ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/girdpixel
           fi
 
-      - name: Show Tailscale IP and tmate info
+      - name: Display connection info
         run: |
           echo "🔗 Tailscale IP:"
           tailscale ip -4 || echo "Tailscale IP not found"
-          echo ""
-          echo "🔑 tmate SSH session (if running):"
+          echo "🌐 tmate info:"
           command -v tmate >/dev/null && tmate display -p '#{tmate_ssh}' || echo "No tmate session"
-          echo "🌐 Web terminal:"
-          command -v tmate >/dev/null && tmate display -p '#{tmate_web}' || echo "No web terminal"
 
-      - name: Sleep to keep VPS alive
-        run: sleep 60  # ~5h40m (safe under 360 min timeout)
+      - name: Keep VPS alive (Test Mode)
+        run: sleep 60  # Only 1 minute for testing
 
-      - name: Backup VPS data
+      - name: Create incremental backup
         run: |
-          echo "✅ Backing up VPS data..."
+          echo "✅ Creating incremental backup..."
           BACKUP_DIR="/opt/vps-backup"
-          sudo mkdir -p "$BACKUP_DIR/data"
+          SNAPSHOT_FILE="$BACKUP_DIR/snapshot.file"
+          mkdir -p "$BACKUP_DIR"
 
-          echo "📂 Copying Tailscale state..."
-          if [ -f /var/lib/tailscale/tailscaled.state ]; then
-            sudo cp /var/lib/tailscale/tailscaled.state "$BACKUP_DIR/data/"
-          fi
+          echo "📂 Preparing directories to backup..."
+          INCLUDE_DIRS="/etc /var/lib /var/www /opt /home"
 
-          echo "📂 Preparing directories to backup: /etc /var /home/HTNodes /opt"
-          TOTAL_SIZE=$(du -sb /etc /var /home/HTNodes /opt \
-            --exclude=/var/log \
-            --exclude=/var/cache \
-            --exclude=/var/lib/apt/lists \
-            --exclude=/var/lib/docker 2>/dev/null | awk '{sum+=$1} END {print sum}')
-          echo "📦 Total size after exclusions: $TOTAL_SIZE bytes"
-
-          echo "🔄 Creating compressed backup (.tar.zst) with progress bar..."
-          sudo tar --exclude='/var/log' \
+          echo "🔄 Creating incremental tar..."
+          sudo tar --listed-incremental="$SNAPSHOT_FILE" \
+                   --exclude='/var/log' \
                    --exclude='/var/cache' \
                    --exclude='/var/lib/apt/lists' \
                    --exclude='/var/lib/docker' \
-                   -cf - /etc /var /home/HTNodes /opt | pv -s $TOTAL_SIZE | zstd -19 -T0 -o backup.tar.zst
+                   --exclude='/tmp' \
+                   -cf - $INCLUDE_DIRS | pv | pigz -9 > "$BACKUP_DIR/backup.tar.gz"
 
           echo "✅ Backup complete!"
 
-      - name: Upload VPS backup artifact
+      - name: Delete old artifact (if any)
+        continue-on-error: true
+        run: |
+          echo "🧹 Deleting old backup artifact..."
+          gh api -X GET "repos/${{ github.repository }}/actions/artifacts" --jq '.artifacts[] | select(.name=="vps-backup-latest") | .id' | \
+          xargs -r -I{} gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/{}" || true
+
+      - name: Upload latest backup
         uses: actions/upload-artifact@v4
         with:
           name: vps-backup-latest
-          path: backup.tar.zst
-          overwrite: true   # ensures old backup is replaced
-
-      - name: Delete old backup artifacts (auto-clean)
-        uses: geekyeggo/delete-artifact@v5
-        with:
-          name: |
-            vps-backup
+          path: /opt/vps-backup/backup.tar.gz
