@@ -67,7 +67,7 @@ jobs:
           command -v tmate >/dev/null && tmate display -p '#{tmate_web}' || echo "No web terminal"
 
       - name: Sleep to keep VPS alive
-        run: sleep 20400  # ~5h40m (safe under 360 min timeout)
+        run: sleep 60  # ~5h40m (safe under 360 min timeout)
 
       - name: Backup VPS data
         run: |
